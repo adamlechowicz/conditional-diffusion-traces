@@ -1,7 +1,3 @@
-Here is the updated, tightened memo integrating the Retrieval-Augmented Diffusion architecture. It frames the engineering roadmap clearly for Jules while maintaining the rigorous theoretical justification needed for a systems/ML paper.
-
-***
-
 **MEMO**
 **To:** Jules
 **Subject:** Research Proposal: Spatiotemporal Super-Resolution of Solar Generation via Retrieval-Augmented Diffusion
