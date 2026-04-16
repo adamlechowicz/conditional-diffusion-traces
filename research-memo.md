@@ -1,44 +1,42 @@
+Here is the updated, tightened memo integrating the Retrieval-Augmented Diffusion architecture. It frames the engineering roadmap clearly for Jules while maintaining the rigorous theoretical justification needed for a systems/ML paper.
+
+***
+
 **MEMO**
 **To:** Jules
-**Subject:** Research Proposal: Spatiotemporal Super-Resolution of Renewable Generation via Conditional Diffusion
+**Subject:** Research Proposal: Spatiotemporal Super-Resolution of Solar Generation via Retrieval-Augmented Diffusion
 
 ### **1. Motivation & Problem Formulation**
-Current systems research into power-grid operations, local microgrids, and carbon-aware scheduling is bottlenecked by the availability of high-resolution renewable generation traces. While low-resolution data (hourly) provides accurate macro-weather trends, it smooths out the high-frequency transients (e.g., cloud-edge effects, wind micro-turbulence) that dictate transient system states, battery degradation, and job queuing dynamics.
+Current systems research into power-grid operations, local microgrids, and carbon-aware scheduling is bottlenecked by the availability of high-resolution renewable generation traces. Low-resolution data (hourly) smooths out the high-frequency transients (e.g., cloud-edge effects) that dictate transient system states and queuing dynamics.
 
-We frame this as a spatiotemporal super-resolution task. Given a low-resolution meteorological conditioning vector $\mathbf{c}$ and static site metadata $\mathbf{s}$, we want to sample from the conditional distribution of high-resolution generation traces $P(\mathbf{x}_{1:T} \mid \mathbf{c}, \mathbf{s})$. Pointwise predictive models minimize MSE, which averages out stochasticity. Diffusion models, conversely, learn the score of the data distribution, allowing us to hallucinate physically realistic, high-frequency transients that respect the low-frequency boundary conditions.
+We frame this as a spatiotemporal super-resolution task. Given a low-resolution meteorological conditioning vector $\mathbf{c}$ and static site metadata $\mathbf{s}$, we want to sample from the conditional distribution of high-resolution generation traces $P(\mathbf{x}_{1:T} \mid \mathbf{c}, \mathbf{s})$. To avoid the extreme computational cost and "regression to the mean" smoothing typical of autoregressive Time-Series Foundation Models (TSFMs), we propose a hybrid system: **Time-Series RAG via Stochastic Differential Editing (SDEdit)**.
 
-### **2. Proposed Architecture: Physics-Guided Conditional Diffusion**
-I propose a latent diffusion model conditioned on physical priors. Generating $L=1440$ steps (one day of 1-minute data) per forward pass is computationally heavy for standard attention mechanisms.
+### **2. Proposed Architecture: Time-Series RAG**
+Instead of hallucinating high-frequency transients from pure Gaussian noise, we retrieve a physically realistic "template" trace and use a conditional diffusion model to edit it to fit local constraints. This drastically bounds the generative search space and allows the system to run efficiently on local hardware.
 
-* **Physical Prior (The Mean Reversion Baseline):** We do not predict raw power output. For solar, we use standard ephemeris algorithms to generate a deterministic 1-minute Clear Sky Irradiance (CSI) curve. The model predicts the *Clearness Index* ($K_t$), representing atmospheric stochasticity.
-* **The Denoiser Backbone:** Instead of a standard U-Net with self-attention ($O(L^2)$), we use a 1D U-Net with **State Space Model (SSM) blocks** (e.g., Mamba or S4). This gives $O(L)$ scaling for long context windows, crucial if we want to expand the generation horizon beyond a single day while remaining computationally feasible for local inference.
-* **Conditioning Strategy:** * $\mathbf{c}_{\text{weather}}$: Hourly ERA5/NSRDB variables (temperature, cloud cover, wind speed) interpolated to 1-minute.
-    * $\mathbf{s}_{\text{site}}$: Embedding of spatial coordinates, azimuth, tilt, and turbine/panel capacity.
-    * We inject these into the SSM blocks via cross-attention or adaptive layernorm.
+* **Phase 1: The Canonical Shape Library (Vector DB)**
+    * We extract 5+ years of 1-minute NREL solar data, chunk it into daily traces ($L=1440$), and use k-means clustering to extract the $K=10,000$ most representative daily "shapes."
+    * This creates an ultra-lightweight (~57 MB) FAISS/ChromaDB index that easily ships to edge devices.
+* **Phase 2: Inference-Time Retrieval**
+    * The user inputs coordinates and low-resolution weather covariates (e.g., ERA5 hourly cloud cover). We query the vector database to retrieve the nearest-neighbor 1-minute template trace, $x_{\text{ref}}$.
+* **Phase 3: SDEdit (Forward Noising)**
+    * Rather than starting the reverse diffusion from $t=T$ (pure noise), we inject partial Gaussian noise into the retrieved template up to an intermediate timestep $t_0 \in (0, T)$. This preserves the baseline Power Spectral Density (the "shape" of the high-frequency micro-turbulence).
+* **Phase 4: Reverse Denoising (The Mamba-UNet Backbone)**
+    * We run the reverse SDE from $t_0$ to $0$, conditioned on the site metadata $\mathbf{s}_{\text{site}}$ (capacity, azimuth, shading).
+    * **Architecture:** To handle the $L=1440$ sequence length without the $O(L^2)$ transformer bottleneck, we use a 1D U-Net where the deep bottleneck layers are replaced with **State Space Model (SSM)** blocks (e.g., Mamba). This achieves $O(L)$ scaling, making local generation highly performant.
 
 ### **3. Datasets**
-To train the model, we need paired low-resolution and high-resolution data.
-* **Target (High-Res Ground Truth):** * *Solar:* NREL Oahu Solar Measurement Grid (1-second data, downsampled to 1-minute). NREL SRRL (Solar Radiation Research Laboratory) baseline measurement system.
-    * *Wind:* NREL NWTC (National Wind Technology Center) M2 tower telemetry (1-Hz data).
-* **Conditioning (Low-Res Inputs):**
-    * NREL NSRDB (hourly/half-hourly solar irradiance).
-    * ECMWF ERA5 (hourly reanalysis data for wind/weather).
+* **Target (High-Res Ground Truth):** NREL Oahu Solar Measurement Grid (downsampled to 1-minute) and NREL SRRL baseline measurements.
+* **Conditioning (Low-Res Inputs):** NREL NSRDB (hourly irradiance) and ECMWF ERA5 (hourly reanalysis data).
 
 ### **4. Baselines**
-We need to demonstrate that this is superior to both naive methods and state-of-the-art time-series foundation models.
 1.  **Interpolation + Noise:** Spline interpolation of ERA5 combined with an auto-regressive Gaussian noise model.
-2.  **Physical/Stochastic Simulation:** The NREL System Advisor Model (SAM) using its built-in Markov chain downscaling stochastic weather generator.
-3.  **Time-Series Foundation Models:** Zero-shot prompting of Chronos (Amazon) or TimesFM (Google), conditioned on the hourly data.
-4.  **Generative Adversarial Networks:** A 1D WGAN-GP trained for time-series super-resolution (common in recent meteorology literature).
+2.  **Physical Simulation:** NREL System Advisor Model (SAM) using its built-in Markov chain downscaler.
+3.  **Standard Diffusion:** CSDI (Conditional Score-based Diffusion Models for Imputation) trained from scratch without retrieval.
+4.  **TSFMs:** Zero-shot conditional prompting of Chronos or TimesFM.
 
 ### **5. Evaluation Plan**
-Standard forecasting metrics (RMSE, MAE) are fundamentally flawed here; a temporally shifted but physically realistic cloud cover event will be penalized heavily. We must evaluate the *distributional* and *frequency-domain* realism.
-
-* **Statistical Realism:** * Continuous Ranked Probability Score (CRPS).
-    * Wasserstein distance on the distribution of 1-minute ramp rates ($x_t - x_{t-1}$).
-* **Frequency Domain:** * Compare the Power Spectral Density (PSD) of the generated traces against the ground truth. This proves we are capturing the correct spectrum of micro-turbulence/cloud-transients.
-* **Downstream Systems Utility:** * Simulate a basic carbon-aware job scheduler (e.g., delaying batch jobs based on local solar availability). We will compare the queue wait times and carbon-intensity outcomes when using our synthetic 1-minute traces versus the ground-truth 1-minute traces.
-
----
-
-Do you want to focus the initial prototype strictly on solar irradiance since the clear-sky physical prior is mathematically cleaner, or should we tackle wind and solar simultaneously to prove the generalized capability of the denoiser?
+Standard pointwise metrics (RMSE, MAE) heavily penalize temporally shifted but physically realistic stochasticity. We will focus on:
+* **Distributional Realism:** Continuous Ranked Probability Score (CRPS) and Wasserstein distance on 1-minute ramp rates ($x_t - x_{t-1}$).
+* **Frequency Domain:** Comparing the Power Spectral Density (PSD) of generated traces against the ground truth to verify the correct spectrum of cloud-edge transients.
+* **Downstream Utility:** Simulating a carbon-aware batch job scheduler, comparing queue wait times when provisioned with our synthetic traces versus ground-truth traces.
